@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,6 +9,7 @@ import (
 
 	"database/sql"
 
+	rcd "github.com/ThisDevDane/msgreplay/recording"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	rabbithole "github.com/michaelklishin/rabbit-hole/v2"
@@ -87,7 +87,7 @@ func recordRun(_ *cobra.Command, _ []string) error {
 
 			go func() {
 				for d := range msgs {
-					rm := DeliveryToRecordedMessage(d)
+					rm := rcd.DeliveryToRecordedMessage(d)
 					rm.Save(recordingFile, startTs)
 				}
 			}()
@@ -136,15 +136,6 @@ func createOutputFileDSN(outputName string) string {
 	}
 
 	return fmt.Sprintf("file:%s", outputName)
-}
-
-func convertHeadersToBytes(headers amqp.Table) ([]byte, error) {
-	buf, err := json.Marshal(headers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode headers using json: %w", err)
-	}
-
-	return buf, nil
 }
 
 func init() {
