@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/ThisDevDane/msgreplay/recording"
 	"github.com/google/uuid"
@@ -28,14 +27,8 @@ var (
 
 var recordCmd = &cobra.Command{
 	Use:   "record",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	RunE: recordRun,
+	Short: "Duplicate specified queues and record message to local file",
+	RunE:  recordRun,
 }
 
 func recordRun(_ *cobra.Command, _ []string) error {
@@ -52,12 +45,50 @@ func recordRun(_ *cobra.Command, _ []string) error {
 	}
 	defer recordingFile.Close()
 
-	for _, qtr := range queuesToRecord {
-		queue, err := client.GetQueue(vhost, qtr)
-		if err != nil {
-			return err
+	rd := RecordingDevice{client, conn}
+
+	data, err := rd.SetupQueues(queuesToRecord)
+	if err != nil {
+		for _, qd := range data {
+			qd.Channel.Close()
 		}
-		bindings, _ := client.ListQueueBindings(vhost, queue.Name)
+
+		return err
+	}
+
+	rd.BindQueuesAndRecord(data)
+
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
+	<-done
+
+	for _, qd := range data {
+		qd.Channel.Close()
+	}
+
+	return nil
+}
+
+type RecordingDevice struct {
+	*rabbithole.Client
+	*amqp.Connection
+}
+
+type QueueData struct {
+	Bindings []rabbithole.BindingInfo
+	Queue    amqp.Queue
+	Channel  *amqp.Channel
+}
+
+func (rd *RecordingDevice) SetupQueues(queues []string) ([]QueueData, error) {
+	result := []QueueData{}
+
+	for _, qtr := range queues {
+		queue, err := rd.GetQueue(vhost, qtr)
+		if err != nil {
+			return nil, err
+		}
+		bindings, _ := rd.ListQueueBindings(vhost, queue.Name)
 		if len(bindings) <= 1 {
 			log.Warn().Msgf("Not recording '%s' as there isn't any bindings to copy", queue.Name)
 			continue
@@ -65,37 +96,40 @@ func recordRun(_ *cobra.Command, _ []string) error {
 
 		log.Info().Msgf("Setting up recording queue for '%s' with %d bindings", queue.Name, len(bindings)-1)
 
-		ch, _ := conn.Channel()
+		ch, _ := rd.Channel()
 		defer ch.Close()
 
 		q, err := ch.QueueDeclare(fmt.Sprintf("msgreplay-%s-%v", queue.Name, uuid.New().String()), false, true, true, false, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		for _, b := range bindings {
+		result = append(result, QueueData{bindings, q, ch})
+	}
+
+	return result, nil
+}
+
+func (rd *RecordingDevice) BindQueuesAndRecord(data []QueueData) {
+	for _, qd := range data {
+		for _, b := range qd.Bindings {
 			if b.Source == "" { // avoid default exchange binding
 				continue
 			}
 
-			ch.QueueBind(q.Name, b.RoutingKey, b.Source, false, nil)
+			go func(b rabbithole.BindingInfo) {
+				qd.Channel.QueueBind(qd.Queue.Name, b.RoutingKey, b.Source, false, nil)
 
-			msgs, _ := ch.Consume(q.Name, "msgreplay", true, true, false, false, nil)
+				msgs, _ := qd.Channel.Consume(qd.Queue.Name, "msgreplay", true, true, false, false, nil)
 
-			go func() {
 				for d := range msgs {
 					rm := recording.DeliveryToRecordedMessage(d)
 					recordingFile.RecordMessage(rm)
 				}
-			}()
+			}(b)
 		}
 	}
 
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
-	<-done
-
-	return nil
 }
 
 func init() {
