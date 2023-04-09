@@ -6,7 +6,7 @@
 # User-specific stuff
 .idea
 .env
-*.db3
+*.rec
 
 # Generated files
 .idea/**/contentModel.xml

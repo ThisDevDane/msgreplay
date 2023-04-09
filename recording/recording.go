@@ -102,7 +102,7 @@ func recordingDSN(outputName string) string {
 		os.Remove(outputName)
 	}
 
-	return fmt.Sprintf("file:%s", outputName)
+	return fmt.Sprintf("file:%s.rec", outputName)
 }
 
 const createVerTblStmt = `CREATE TABLE version
