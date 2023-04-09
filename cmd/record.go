@@ -161,7 +161,11 @@ func (rd *RecordingDevice) BindQueuesAndRecord(data []QueueData) {
 func init() {
 	rootCmd.AddCommand(recordCmd)
 
-	recordCmd.Flags().StringSliceVarP(&queuesToRecord, "queue", "q", nil, "names of the queues you want to record\nYou can record multiple by either providing this argument multiple times or by using a comma-seperated list\n\ti.e --queue=\"foo,bar\"\n")
+	recordCmd.Flags().StringSliceVarP(&queuesToRecord, "queue", "q", nil, `names of the queues you want to record
+you can record multiple by either providing this argument multiple times or by using a comma-seperated list
+    i.e --queue=\"foo,bar\"
+you can also specify this as a regular expression to match multiple queues (uses golang's flavoured regex)
+    i.e -q "foo.*" to match 'foo', 'fooTest' and 'fooBar'`)
 	recordCmd.MarkFlagRequired("queue")
 
 	recordCmd.Flags().IntVar(&managementPort, "management-port", 15672, "port of the RabbitMQ management interface")
