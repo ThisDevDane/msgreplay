@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 
 	"github.com/ThisDevDane/msgreplay/recording"
@@ -20,6 +21,7 @@ var (
 	vhost          string
 
 	queuesToRecord []string
+	queuesRegex    []*regexp.Regexp
 
 	outputName    string
 	recordingFile *recording.Recording
@@ -28,17 +30,35 @@ var (
 var recordCmd = &cobra.Command{
 	Use:   "record",
 	Short: "Duplicate specified queues and record message to local file",
-	RunE:  recordRun,
+	PreRunE: func(_ *cobra.Command, _ []string) error {
+		queuesRegex = []*regexp.Regexp{}
+		for _, v := range queuesToRecord {
+			r, err := regexp.Compile(v)
+			if err != nil {
+				return err
+			}
+
+			queuesRegex = append(queuesRegex, r)
+		}
+
+		return nil
+	},
+	RunE: recordRun,
 }
 
 func recordRun(_ *cobra.Command, _ []string) error {
 	log.Info().Msg("Setting up connection to RabbitMQ")
-	client, _ := rabbithole.NewClient(fmt.Sprintf("http://%s:%d", host, managementPort), username, password)
-	conn, _ := amqp.Dial(fmt.Sprintf("amqp://%s:%s@%s:%d", username, password, host, amqpPort))
+	client, err := rabbithole.NewClient(fmt.Sprintf("http://%s:%d", host, managementPort), username, password)
+	if err != nil {
+		return err
+	}
+	conn, err := amqp.Dial(fmt.Sprintf("amqp://%s:%s@%s:%d", username, password, host, amqpPort))
+	if err != nil {
+		return err
+	}
 	defer conn.Close()
 
 	log.Info().Msgf("Setting up output file")
-	var err error
 	recordingFile, err = recording.NewRecording(outputName, true)
 	if err != nil {
 		return err
@@ -80,14 +100,20 @@ type QueueData struct {
 	Channel  *amqp.Channel
 }
 
-func (rd *RecordingDevice) SetupQueues(queues []string) ([]QueueData, error) {
+func (rd *RecordingDevice) SetupQueues(queuesToRecord []string) ([]QueueData, error) {
 	result := []QueueData{}
+	queues, _ := rd.ListQueuesIn(vhost)
 
-	for _, qtr := range queues {
-		queue, err := rd.GetQueue(vhost, qtr)
-		if err != nil {
-			return nil, err
+	qs := []rabbithole.QueueInfo{}
+	for _, qi := range queues {
+		for _, r := range queuesRegex {
+			if r.MatchString(qi.Name) {
+				qs = append(qs, qi)
+			}
 		}
+	}
+
+	for _, queue := range qs {
 		bindings, _ := rd.ListQueueBindings(vhost, queue.Name)
 		if len(bindings) <= 1 {
 			log.Warn().Msgf("Not recording '%s' as there isn't any bindings to copy", queue.Name)
