@@ -1,10 +1,8 @@
 package recording
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog/log"
@@ -38,44 +36,6 @@ func DeliveryToRecordedMessage(d amqp.Delivery) RecordedMessage {
 	rm.Pub.Body = d.Body
 
 	return rm
-}
-
-func (rm RecordedMessage) Save(output *sql.DB, startTs time.Time) error {
-	headerBlob, err := convertHeadersToBytes(rm.Pub.Headers)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Interface("headers", rm.Pub.Headers).
-			Msg("Unable to convert headers to []byte")
-	}
-
-	log.Info().Msg("Inserting msg into output file")
-
-	_, err = output.Exec("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		time.Since(startTs).Seconds(),
-		rm.Exchange,
-		rm.RoutingKey,
-		headerBlob,
-		rm.Pub.ContentType,
-		rm.Pub.ContentEncoding,
-		rm.Pub.DeliveryMode,
-		rm.Pub.CorrelationId,
-		rm.Pub.ReplyTo,
-		rm.Pub.Expiration,
-		rm.Pub.MessageId,
-		rm.Pub.Type,
-		rm.Pub.UserId,
-		rm.Pub.AppId,
-		rm.Pub.Body)
-
-	if err != nil {
-		log.Error().
-			Err(err).
-			Msg("Failerm.Pub to insert message to output file")
-		return err
-	}
-
-	return nil
 }
 
 func (rm RecordedMessage) Publish(ch *amqp.Channel) error {

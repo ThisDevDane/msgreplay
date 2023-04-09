@@ -7,9 +7,7 @@ import (
 	"syscall"
 	"time"
 
-	"database/sql"
-
-	rcd "github.com/ThisDevDane/msgreplay/recording"
+	"github.com/ThisDevDane/msgreplay/recording"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	rabbithole "github.com/michaelklishin/rabbit-hole/v2"
@@ -25,7 +23,7 @@ var (
 	queuesToRecord []string
 
 	outputName    string
-	recordingFile *sql.DB
+	recordingFile *recording.Recording
 )
 
 var recordCmd = &cobra.Command{
@@ -48,13 +46,12 @@ func recordRun(_ *cobra.Command, _ []string) error {
 
 	log.Info().Msgf("Setting up output file")
 	var err error
-	recordingFile, err = setupRecordingFile(outputName)
+	recordingFile, err = recording.NewRecording(outputName, true)
 	if err != nil {
 		return err
 	}
 	defer recordingFile.Close()
 
-	startTs := time.Now().UTC()
 	for _, qtr := range queuesToRecord {
 		queue, err := client.GetQueue(vhost, qtr)
 		if err != nil {
@@ -87,8 +84,8 @@ func recordRun(_ *cobra.Command, _ []string) error {
 
 			go func() {
 				for d := range msgs {
-					rm := rcd.DeliveryToRecordedMessage(d)
-					rm.Save(recordingFile, startTs)
+					rm := recording.DeliveryToRecordedMessage(d)
+					recordingFile.RecordMessage(rm)
 				}
 			}()
 		}
@@ -99,43 +96,6 @@ func recordRun(_ *cobra.Command, _ []string) error {
 	<-done
 
 	return nil
-}
-
-func setupRecordingFile(outputName string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", createOutputFileDSN(outputName))
-	if err != nil {
-		return nil, err
-	}
-
-	err = db.Ping()
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec(createVerTblStmt)
-	if err != nil {
-		return nil, err
-	}
-	db.Exec("INSERT INTO version VALUES ('v1')")
-
-	_, err = db.Exec(createMsgTblStmt)
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
-}
-
-func createOutputFileDSN(outputName string) string {
-	if outputName == "" {
-		outputName = fmt.Sprintf("recording-%v", time.Now().UTC().Format(time.RFC3339))
-	}
-
-	if _, err := os.Stat(outputName); !os.IsNotExist(err) {
-		os.Remove(outputName)
-	}
-
-	return fmt.Sprintf("file:%s", outputName)
 }
 
 func init() {
@@ -149,30 +109,3 @@ func init() {
 
 	recordCmd.Flags().StringVarP(&outputName, "output", "o", "", "name of the output sqlite file to store the recorded messages in")
 }
-
-const createVerTblStmt = `CREATE TABLE version
-(
-    version TEXT
-)`
-
-const createMsgTblStmt = `CREATE TABLE messages
-(
-    start_offset    REAL,
-    exchange        TEXT,
-    routingKey      TEXT,
-
-    headers         BLOB,
-
-    contentType     TEXT,
-    contentEncoding TEXT,
-    deliveryMode    INTEGER,
-    correlationId   TEXT,
-    replyTo         TEXT,
-    expiration      TEXT,
-    messageId       TEXT,
-    type            TEXT,
-    userid          TEXT,
-    appid           TEXT,
-
-    body            BLOB
-)`
