@@ -1,4 +1,4 @@
-name: Docker build
+name: Executable build
 
 on: [push, workflow_dispatch]
 
