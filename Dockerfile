@@ -3,7 +3,7 @@ FROM golang:1.20-alpine as builder
 WORKDIR /app
 ENV CGO_ENABLED 1
 
-RUN apk add --no-cache --update gcc g++
+RUN apk add --no-cache --update gcc musl-dev
 COPY go.* ./
 RUN go mod download
 

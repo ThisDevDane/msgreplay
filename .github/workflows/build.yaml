@@ -1,0 +1,19 @@
+name: Docker build
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build_windows:
+    env:
+      CGO_ENABLED: 1
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: extractions/setup-just@v1
+    - name: build executable
+      run: go build -v -o msgreplay
+    - uses: actions/upload-artifact@v3
+      with:
+        name: windows
+        path: msgreplay.exe
+
