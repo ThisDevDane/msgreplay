@@ -1,6 +1,7 @@
 package recording
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -15,6 +16,8 @@ type RecordedMessage struct {
 	RoutingKey string
 
 	Pub amqp.Publishing
+
+	ctx context.Context
 }
 
 func DeliveryToRecordedMessage(d amqp.Delivery) RecordedMessage {
@@ -34,18 +37,13 @@ func DeliveryToRecordedMessage(d amqp.Delivery) RecordedMessage {
 	rm.Pub.UserId = d.UserId
 	rm.Pub.AppId = d.AppId
 	rm.Pub.Body = d.Body
+	rm.ctx = context.Background()
 
 	return rm
 }
 
 func (rm RecordedMessage) Publish(ch *amqp.Channel) error {
-	log.Trace().
-		Str("exchange", rm.Exchange).
-		Str("routing_key", rm.RoutingKey).
-		Int("body_len", len(rm.Pub.Body)).
-		Int("header_len", len(rm.Pub.Headers)).
-		Msg("publishing message")
-	err := ch.Publish(rm.Exchange, rm.RoutingKey, false, false, rm.Pub)
+	err := ch.PublishWithContext(rm.ctx, rm.Exchange, rm.RoutingKey, false, false, rm.Pub)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to publish message from recording")
 		return err

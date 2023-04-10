@@ -4,15 +4,14 @@ Copyright © 2023 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
-	"database/sql"
-	"encoding/json"
 	"fmt"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog/log"
 
-	rcd "github.com/ThisDevDane/msgreplay/recording"
+	"github.com/ThisDevDane/msgreplay/recording"
 	"github.com/spf13/cobra"
 )
 
@@ -28,18 +27,12 @@ var playCmd = &cobra.Command{
 	RunE:  playRun,
 }
 
-func playRun(_ *cobra.Command, _ []string) error {
-
-	recording, err := sql.Open("sqlite3", fmt.Sprintf("file:%s", inputName))
+func playRun(cmd *cobra.Command, _ []string) error {
+	recording, err := recording.OpenRecording(cmd.Context(), inputName)
 	if err != nil {
 		return err
 	}
-	verRow := recording.QueryRow("SELECT * FROM version")
-	version := "unknown"
-	verRow.Scan(&version)
-	if version != "v1" {
-		return fmt.Errorf("version: %s is unsupported by this version of msgreplay", version)
-	}
+	defer recording.Close()
 
 	conn, err := amqp.Dial(fmt.Sprintf("amqp://%s:%s@%s:%d", username, password, host, amqpPort))
 	if err != nil {
@@ -53,37 +46,30 @@ func playRun(_ *cobra.Command, _ []string) error {
 	}
 	defer ch.Close()
 
-	rows, _ := recording.Query("SELECT * FROM messages")
+	start := time.Now().UTC()
+	msgCh, err := recording.PlayRecording()
 	if err != nil {
 		return err
 	}
-	for rows.Next() {
-		rm := rcd.RecordedMessage{}
-		blob := []byte{}
 
-		err := rows.Scan(&rm.Offset, &rm.Exchange, &rm.RoutingKey,
-			&blob,
-			&rm.Pub.ContentType,
-			&rm.Pub.ContentEncoding,
-			&rm.Pub.DeliveryMode,
-			&rm.Pub.CorrelationId,
-			&rm.Pub.ReplyTo,
-			&rm.Pub.Expiration,
-			&rm.Pub.MessageId,
-			&rm.Pub.Type,
-			&rm.Pub.UserId,
-			&rm.Pub.AppId,
-			&rm.Pub.Body)
+	for rm := range msgCh {
+		if !instantReplay {
+			since := time.Since(start)
+			offsetDur := time.Duration(rm.Offset) * time.Second
+			if since < offsetDur {
+				time.Sleep((since - offsetDur).Abs())
+			}
 
-		json.Unmarshal(blob, &rm.Pub.Headers)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to scan message from recording")
-			continue
 		}
-
-		go rm.Publish(ch)
+		log.Info().
+			Str("exchange", rm.Exchange).
+			Str("routing_key", rm.RoutingKey).
+			Float64("offset", rm.Offset).
+			Msg("Publishing message")
+		rm.Publish(ch)
 	}
 
+	log.Trace().Msg("end of program")
 	return nil
 }
 

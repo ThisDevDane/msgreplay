@@ -46,7 +46,7 @@ var recordCmd = &cobra.Command{
 	RunE: recordRun,
 }
 
-func recordRun(_ *cobra.Command, _ []string) error {
+func recordRun(cmd *cobra.Command, _ []string) error {
 	log.Info().Msg("Setting up connection to RabbitMQ")
 	client, err := rabbithole.NewClient(fmt.Sprintf("http://%s:%d", host, managementPort), username, password)
 	if err != nil {
@@ -59,7 +59,7 @@ func recordRun(_ *cobra.Command, _ []string) error {
 	defer conn.Close()
 
 	log.Info().Msgf("Setting up output file")
-	recordingFile, err = recording.NewRecording(outputName, true)
+	recordingFile, err = recording.NewRecording(cmd.Context(), outputName, true)
 	if err != nil {
 		return err
 	}
@@ -77,6 +77,7 @@ func recordRun(_ *cobra.Command, _ []string) error {
 	}
 
 	rd.BindQueuesAndRecord(data)
+	log.Info().Msg("Recording started...")
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
@@ -123,7 +124,6 @@ func (rd *RecordingDevice) SetupQueues(queuesToRecord []string) ([]QueueData, er
 		log.Info().Msgf("Setting up recording queue for '%s' with %d bindings", queue.Name, len(bindings)-1)
 
 		ch, _ := rd.Channel()
-		defer ch.Close()
 
 		q, err := ch.QueueDeclare(fmt.Sprintf("msgreplay-%s-%v", queue.Name, uuid.New().String()), false, true, true, false, nil)
 		if err != nil {

@@ -1,7 +1,9 @@
 package recording
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -11,13 +13,14 @@ import (
 )
 
 type Recording struct {
-	db *sql.DB
+	db  *sql.DB
+	ctx context.Context
 
 	startOfRecording time.Time
 }
 
-func NewRecording(name string, startTimeImmediatly bool) (*Recording, error) {
-	db, err := sql.Open("sqlite3", recordingDSN(name))
+func NewRecording(ctx context.Context, name string, startTimeImmediatly bool) (*Recording, error) {
+	db, err := sql.Open("sqlite3", newRecordingDSN(name))
 	if err != nil {
 		return nil, err
 	}
@@ -40,11 +43,35 @@ func NewRecording(name string, startTimeImmediatly bool) (*Recording, error) {
 
 	rec := new(Recording)
 	rec.db = db
+	rec.ctx = ctx
 	if startTimeImmediatly {
 		rec.StartRecordingTime()
 	}
 
 	return rec, nil
+}
+
+func OpenRecording(ctx context.Context, name string) (*Recording, error) {
+	if _, err := os.Stat(name); os.IsNotExist(err) {
+		return nil, err
+	}
+
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s", name))
+	if err != nil {
+		return nil, err
+	}
+	verRow := db.QueryRow("SELECT * FROM version")
+	version := "unknown"
+	verRow.Scan(&version)
+	if version != "v1" {
+		return nil, fmt.Errorf("version: %s is unsupported by this version of msgreplay", version)
+	}
+
+	return &Recording{
+		db,
+		ctx,
+		time.Time{},
+	}, nil
 }
 
 func (r *Recording) StartRecordingTime() {
@@ -62,7 +89,7 @@ func (r *Recording) RecordMessage(msg RecordedMessage) error {
 
 	log.Info().Msg("Inserting msg into output file")
 
-	_, err = r.db.Exec("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	_, err = r.db.ExecContext(r.ctx, "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		time.Since(r.startOfRecording).Seconds(),
 		msg.Exchange,
 		msg.RoutingKey,
@@ -89,20 +116,71 @@ func (r *Recording) RecordMessage(msg RecordedMessage) error {
 	return nil
 }
 
+func (r *Recording) PlayRecording() (<-chan RecordedMessage, error) {
+	channel := make(chan RecordedMessage, 5)
+	rows, err := r.db.QueryContext(r.ctx, "SELECT * FROM messages")
+	if err != nil {
+		return nil, err
+	}
+	go func(ch chan<- RecordedMessage) {
+		defer rows.Close()
+		c := 0
+		for rows.Next() {
+			c += 1
+			log.Trace().Int("count", c).Msg("scanning recorded message")
+			rm := RecordedMessage{}
+			blob := []byte{}
+
+			err := rows.Scan(&rm.Offset, &rm.Exchange, &rm.RoutingKey,
+				&blob,
+				&rm.Pub.ContentType,
+				&rm.Pub.ContentEncoding,
+				&rm.Pub.DeliveryMode,
+				&rm.Pub.CorrelationId,
+				&rm.Pub.ReplyTo,
+				&rm.Pub.Expiration,
+				&rm.Pub.MessageId,
+				&rm.Pub.Type,
+				&rm.Pub.UserId,
+				&rm.Pub.AppId,
+				&rm.Pub.Body)
+
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to scan message from recording")
+				continue
+			}
+
+			json.Unmarshal(blob, &rm.Pub.Headers)
+			rm.ctx = r.ctx
+
+			ch <- rm
+		}
+
+		err := rows.Err()
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to iterate messages from recording")
+		}
+
+		close(ch)
+	}(channel)
+
+	return channel, nil
+}
+
 func (r *Recording) Close() {
 	r.db.Close()
 }
 
-func recordingDSN(outputName string) string {
+func newRecordingDSN(outputName string) string {
 	if outputName == "" {
-		outputName = fmt.Sprintf("recording-%v", time.Now().UTC().Format(time.RFC3339))
+		outputName = fmt.Sprintf("recording-%v.rec", time.Now().UTC().Format(time.RFC3339))
 	}
 
 	if _, err := os.Stat(outputName); !os.IsNotExist(err) {
 		os.Remove(outputName)
 	}
 
-	return fmt.Sprintf("file:%s.rec", outputName)
+	return fmt.Sprintf("file:%s", outputName)
 }
 
 const createVerTblStmt = `CREATE TABLE version
