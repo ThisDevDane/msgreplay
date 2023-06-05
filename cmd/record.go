@@ -114,6 +114,10 @@ func (rd *RecordingDevice) SetupQueues(queuesToRecord []string) ([]QueueData, er
 		}
 	}
 
+	if len(qs) <= 0 {
+		return nil, fmt.Errorf("no queues found for requested queues: '%v'", queuesToRecord)
+	}
+
 	for _, queue := range qs {
 		bindings, _ := rd.ListQueueBindings(vhost, queue.Name)
 		if len(bindings) <= 1 {
@@ -143,16 +147,24 @@ func (rd *RecordingDevice) BindQueuesAndRecord(data []QueueData) {
 				continue
 			}
 
-			go func(b rabbithole.BindingInfo) {
+			go func(qd QueueData, b rabbithole.BindingInfo) {
 				qd.Channel.QueueBind(qd.Queue.Name, b.RoutingKey, b.Source, false, nil)
 
-				msgs, _ := qd.Channel.Consume(qd.Queue.Name, "msgreplay", true, true, false, false, nil)
+				consumerTag := fmt.Sprintf("msgreplay-%s", qd.Queue.Name)
+				msgs, err := qd.Channel.Consume(qd.Queue.Name, consumerTag, true, true, false, false, nil)
+				if err != nil {
+					log.Err(err).
+						Str("queue", qd.Queue.Name).
+						Str("constumer_tag", consumerTag).
+						Msg("Error when starting to consume queue")
+				}
 
 				for d := range msgs {
+					log.Trace().Msg("message consumed")
 					rm := recording.DeliveryToRecordedMessage(d)
 					recordingFile.RecordMessage(rm)
 				}
-			}(b)
+			}(qd, b)
 		}
 	}
 
